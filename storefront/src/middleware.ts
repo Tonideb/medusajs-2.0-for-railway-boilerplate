@@ -1,5 +1,5 @@
 import { HttpTypes } from "@medusajs/types"
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 import { NextRequest, NextResponse } from "next/server"
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_MEDUSA_BACKEND_URL
@@ -43,6 +43,8 @@ async function getRegionMap() {
     regionMapCache.regionMapUpdated = Date.now()
   }
 
+  // console.log(regionMapCache.regionMap, "regionMapCache.regionMap")
+
   return regionMapCache.regionMap
 }
 
@@ -56,29 +58,24 @@ async function getCountryCode(
   regionMap: Map<string, HttpTypes.StoreRegion | number>
 ) {
   try {
-    let countryCode
-
     const vercelCountryCode = request.headers
       .get("x-vercel-ip-country")
       ?.toLowerCase()
 
-    const urlCountryCode = request.nextUrl.pathname.split("/")[1]?.toLowerCase()
-
-    if (urlCountryCode && regionMap.has(urlCountryCode)) {
-      countryCode = urlCountryCode
-    } else if (vercelCountryCode && regionMap.has(vercelCountryCode)) {
-      countryCode = vercelCountryCode
+    if (vercelCountryCode && regionMap.has(vercelCountryCode)) {
+      console.log(vercelCountryCode, "vercelCountryCode")
+      return vercelCountryCode
     } else if (regionMap.has(DEFAULT_REGION)) {
-      countryCode = DEFAULT_REGION
+      return DEFAULT_REGION
     } else if (regionMap.keys().next().value) {
-      countryCode = regionMap.keys().next().value
+      return regionMap.keys().next().value
     }
 
-    return countryCode
+    return null
   } catch (error) {
     if (process.env.NODE_ENV === "development") {
       console.error(
-        "Middleware.ts: Error getting the country code. Did you set up regions in your Medusa Admin and define a NEXT_PUBLIC_MEDUSA_BACKEND_URL environment variable?"
+        "Error getting the country code. Ensure regions are set up and environment variables are configured."
       )
     }
   }
@@ -94,6 +91,8 @@ export async function middleware(request: NextRequest) {
   const checkoutStep = searchParams.get("step")
   const onboardingCookie = request.cookies.get("_medusa_onboarding")
   const cartIdCookie = request.cookies.get("_medusa_cart_id")
+
+  const invitationCodeCookie = request.cookies.get("_medusa_invitation_code")
 
   const regionMap = await getRegionMap()
 
@@ -121,8 +120,13 @@ export async function middleware(request: NextRequest) {
   let response = NextResponse.redirect(redirectUrl, 307)
 
   // If no country code is set, we redirect to the relevant region.
+  // if (!urlHasCountryCode && countryCode) {
+  //   redirectUrl = `${request.nextUrl.origin}/${countryCode}${redirectPath}${queryString}`
+  //   response = NextResponse.redirect(`${redirectUrl}`, 307)
+  // }
+
   if (!urlHasCountryCode && countryCode) {
-    redirectUrl = `${request.nextUrl.origin}/${countryCode}${redirectPath}${queryString}`
+    redirectUrl = `${request.nextUrl.origin}/${countryCode}/waitlist`
     response = NextResponse.redirect(`${redirectUrl}`, 307)
   }
 
@@ -138,9 +142,25 @@ export async function middleware(request: NextRequest) {
     response.cookies.set("_medusa_onboarding", "true", { maxAge: 60 * 60 * 24 })
   }
 
+  // If an invitation code cookie is present, redirect to the homepage.
+  if (invitationCodeCookie) {
+    if (request.nextUrl.pathname === "/store") {
+      const redirectUrl = `${request.nextUrl.origin}/${countryCode}/store`
+      return NextResponse.redirect(redirectUrl, 307)
+    }
+  }
+
+  // If visiting the homepage ("/") without the invitation code cookie, redirect to the waitlist.
+  if (request.nextUrl.pathname === "/") {
+    const redirectUrl = `${request.nextUrl.origin}/${countryCode}/waitlist`
+    return NextResponse.redirect(redirectUrl, 307)
+  }
+
   return response
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|favicon.ico|.*\\.png|.*\\.jpg|.*\\.gif|.*\\.svg).*)"], // prevents redirecting on static files
+  matcher: [
+    "/((?!api|_next/static|favicon.ico|.*\\.png|.*\\.jpg|.*\\.gif|.*\\.svg).*)",
+  ], // prevents redirecting on static files
 }
